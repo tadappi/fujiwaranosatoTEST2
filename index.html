@@ -34,7 +34,16 @@
   import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 
   // ========================= 基本セットアップ =========================
-  const DEFAULT_BG = '#c2c2c2'; // ← ここを変えるだけで一括変更OK
+  const DEFAULT_BG = '#c2c2c2'; // ← 背景色
+
+  // ★★★★★ ここが“初期値ブロック”（GUIを使わず固定で適用する値）★★★★★
+  // ここを書き換えるだけで「モデルの大きさ・回転[deg]・位置」を初期化できます
+  const MODEL_INIT = {
+    scale: 1.0,                       // ← モデル全体スケール
+    rotateDeg: { x: 0, y: 0, z: 0 },  // ← 回転角[度]（X/Y/Z）
+    position:  { x: 0, y: 0, z: 0 }   // ← 位置（X/Y/Z）
+  };
+  // ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
 
   const container = document.getElementById('app');
 
@@ -46,7 +55,7 @@
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(DEFAULT_BG); // ★致命因の修正ポイント
+  scene.background = new THREE.Color(DEFAULT_BG);
 
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 5000);
   camera.position.set(0, 40, 80);
@@ -144,10 +153,7 @@
   }
 
   // ========================= ユーティリティ =========================
-  // 共通：青→赤ピン（リンク可、ホバーで色変化＋ラベル）
-  function createPin({
-    pos=[0,0,0], href, iconBlue, iconRed, labelPng, scale=10, labelOffset, labelScale=null
-  }) {
+  function createPin({ pos=[0,0,0], href, iconBlue, iconRed, labelPng, scale=10, labelOffset, labelScale=null }) {
     const texBlue  = loadTex(iconBlue);
     const texRed   = loadTex(iconRed);
     const texLabel = labelPng ? loadTex(labelPng) : null;
@@ -174,10 +180,7 @@
     return pin;
   }
 
-  // 緑ピン専用：常時緑、ホバーで各ラベル表示、リンクなし・色変化なし
-  function createGreenPin({
-    pos=[0,0,0], labelPng, scale=1, labelOffset=[0, scale*1.4, 0], labelScale=null
-  }) {
+  function createGreenPin({ pos=[0,0,0], labelPng, scale=1, labelOffset=[0, scale*1.4, 0], labelScale=null }) {
     const texPin   = loadTex('./labelpin1green.png');
     const texLabel = loadTex(labelPng);
 
@@ -195,11 +198,9 @@
     label.visible = false;
     pin.add(label);
     pin.userData.label = label;
-
     return pin;
   }
 
-  // エリア（Y回転可）
   function createHoverArea({ center=[0,0,0], size=[30,10,30], rotYDeg=0, href, color=0x2a6cff }) {
     const trigger = new THREE.Mesh(
       new THREE.BoxGeometry(...size),
@@ -229,18 +230,39 @@
     root.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = false; }});
     scene.add(root);
 
-    // フィット
+    // フィット：モデルの重心を原点へ
     const box = new THREE.Box3().setFromObject(root);
     const size = new THREE.Vector3(), center = new THREE.Vector3();
     box.getSize(size); box.getCenter(center);
     root.position.sub(center);
+
+    // ======== ★ 初期値を適用（GUIに依存しない固定値）========
+    // 大きさ（スケール一括）
+    root.scale.setScalar(MODEL_INIT.scale);
+
+    // 回転（度指定 → ラジアンに変換）
+    root.rotation.set(
+      THREE.MathUtils.degToRad(MODEL_INIT.rotateDeg.x),
+      THREE.MathUtils.degToRad(MODEL_INIT.rotateDeg.y),
+      THREE.MathUtils.degToRad(MODEL_INIT.rotateDeg.z)
+    );
+
+    // 位置（原点基準にオフセットしたい場合）
+    root.position.add(new THREE.Vector3(
+      MODEL_INIT.position.x,
+      MODEL_INIT.position.y,
+      MODEL_INIT.position.z
+    ));
+    // =========================================================
+
+    // カメラをモデルサイズに合わせて初期配置
     const maxDim = Math.max(size.x, size.y, size.z);
     const dist = maxDim * 1.6;
     camera.position.set(dist*0.3, dist*0.2, dist*0.3);
     controls.target.set(0,0,0);
     controls.update();
 
-    // ===== 青ピン =====
+    // ===== 青ピン（例） =====
     const pin1 = createPin({
       pos: [10, 10, -5],
       href: 'https://dazaifu.org/dazaifu-seicho-ato/',
@@ -264,32 +286,23 @@
     root.add(pin2); clickableObjects.push(pin2);
 
     // ===== 緑ピン × 5 =====
-    const GREEN_PINS = [
+    [
       { pos:[  5, 11,  -8], label:'./muryou.png' },
       { pos:[ 18, 12, -12], label:'./tenku.png' },
       { pos:[-10, 10,  14], label:'./tyuson.png' },
       { pos:[ 30, 13,   6], label:'./yoshi.png' },
       { pos:[-22, 11,  -4], label:'./enmei.png' },
-    ];
-    GREEN_PINS.forEach(({pos, label})=>{
-      const p = createGreenPin({
-        pos,
-        labelPng: label,
-        scale: 1,
-        labelOffset:[0,1.5,0],
-        labelScale: 1.0,
-      });
-      root.add(p);
-      clickableObjects.push(p);
+    ].forEach(({pos, label})=>{
+      const p = createGreenPin({ pos, labelPng: label, scale: 1, labelOffset:[0,1.5,0], labelScale: 1.0 });
+      root.add(p); clickableObjects.push(p);
     });
 
-    // ===== エリア：3つ =====
-    const AREA_DEFS = [
+    // ===== エリア（例） =====
+    [
       { center:[  3, 2, 15], size:[ 6, 1, 10], rotYDeg: 10,  color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },
       { center:[ -6, 0,  0], size:[ 4, 1,  6], rotYDeg:-14,  color:0xff7b29, href:'https://example.com/area-2' },
       { center:[-25, 7, 15], size:[15, 4, 20], rotYDeg:-15,  color:0x24d18f, href:'https://example.com/area-3' }
-    ];
-    AREA_DEFS.forEach(def=>{
+    ].forEach(def=>{
       const { trigger, fx } = createHoverArea(def);
       root.add(trigger); root.add(fx);
       clickableObjects.push(trigger); areaFxList.push(fx);
@@ -300,10 +313,10 @@
     alert('GLBの読み込みに失敗しました。パス/ファイル名をご確認ください。');
   });
 
-  // ========================= GUI =========================
+  // ========================= GUI（表示はそのまま・回転は初期値に合わせる） =========================
   const gui = new GUI({ title: 'Controls' });
   const params = {
-    background: DEFAULT_BG,                 // GUIの初期値も統一
+    background: DEFAULT_BG,
     ambientIntensity: ambient.intensity,
     sunIntensity: sun.intensity,
     sunElevDeg: 35,
@@ -312,7 +325,12 @@
     rotateSpeed: controls.autoRotateSpeed,
     showGroundShadow: ground.visible,
     showAxes: true,
-    rotateX: 0, rotateY: 0, rotateZ: 0
+
+    // ▼ tick() で params→root.rotation に上書きしている関係で、
+    //    初期回転を維持したいので params の開始値も MODEL_INIT に合わせておく
+    rotateX: MODEL_INIT.rotateDeg.x,
+    rotateY: MODEL_INIT.rotateDeg.y,
+    rotateZ: MODEL_INIT.rotateDeg.z
   };
   const upSun = ()=>{
     const elev = THREE.MathUtils.degToRad(params.sunElevDeg);
@@ -322,13 +340,10 @@
   };
   upSun();
 
-  gui.addColor(params, 'background').name('Background')
-     .onChange(v=> scene.background = new THREE.Color(v));
+  gui.addColor(params, 'background').name('Background').onChange(v=> scene.background = new THREE.Color(v));
   const fL = gui.addFolder('Lighting');
-  fL.add(params, 'ambientIntensity', 0, 2.5, 0.01).name('Ambient')
-    .onChange(v=> ambient.intensity = v);
-  fL.add(params, 'sunIntensity', 0, 3, 0.01).name('Sun')
-    .onChange(v=> sun.intensity = v);
+  fL.add(params, 'ambientIntensity', 0, 2.5, 0.01).name('Ambient').onChange(v=> ambient.intensity = v);
+  fL.add(params, 'sunIntensity', 0, 3, 0.01).name('Sun').onChange(v=> sun.intensity = v);
   fL.add(params, 'sunElevDeg', 0, 90, 1).name('Sun Elev [deg]').onChange(upSun);
   fL.add(params, 'sunAziDeg', -180, 180, 1).name('Sun Azi [deg]').onChange(upSun);
   fL.add(params, 'showGroundShadow').name('Ground shadow').onChange(v=> ground.visible = v);
@@ -358,41 +373,31 @@
 
     const ud = hoverObject.userData || {};
     const href = ud.href;
-    if (!href) return; // リンク無しは何もしない（緑ピンなど）
+    if (!href) return;
 
-    // クリック対象のワールド座標 p
     hoverObject.getWorldPosition(_p);
     const p = _p.clone();
 
-    // 現カメラ→p の直線上で、内側に到達点を作る
     const d0 = camera.position.distanceTo(p);
-
-    // 目標までの希望距離（“寄り”の強さ）
     let desiredDist;
     if (hoverObject.isMesh) {
-      // エリア：自身のサイズから決定
       _box.setFromObject(hoverObject);
       _box.getSize(_size);
       const r = Math.max(_size.x, _size.y, _size.z) * 0.5;
       desiredDist = THREE.MathUtils.clamp(r * 2.2, 10, 120);
     } else {
-      // ピン：現距離の35%まで寄る
       desiredDist = THREE.MathUtils.clamp(d0 * 0.35, 10, 120);
     }
 
-    // 同一直線上で内側へ
-    const dir = camera.position.clone().sub(p).normalize(); // p→camera 方向
+    const dir = camera.position.clone().sub(p).normalize();
     const autoCam = p.clone().add(dir.multiplyScalar(desiredDist));
 
-    // 明示指定があれば優先
     const destPos = (ud.camPos instanceof THREE.Vector3) ? ud.camPos.clone() : autoCam;
     const lookAt  = (ud.lookAt instanceof THREE.Vector3) ? ud.lookAt.clone() : p.clone();
     const duration = (typeof ud.flyMs === 'number') ? ud.flyMs : 1500;
 
     flyTo(camera, controls, destPos, lookAt, duration, ()=>{
-      // 到達したら即遷移（間髪入れずに）
-      window.location.href = href;     // 同一タブ
-      // window.open(href, '_blank');  // 新規タブ派ならこちら
+      window.location.href = href;
     });
   });
 
@@ -433,10 +438,9 @@
       renderer.domElement.style.cursor = hoverObject ? 'pointer' : 'default';
     }
 
-    // エリアFX：ホバー中のものだけ演出
+    // エリアFX
     areaFxList.forEach(fx=>{
       const isActive = (hoverObject && hoverObject.userData.type === 'area' && hoverObject.userData.fx === fx);
-
       if (!isActive) {
         fx.visible = false;
         fx.userData.phase = 'idle';
@@ -445,10 +449,8 @@
         fx.material.opacity = 0.35;
         return;
       }
-
       fx.visible = true;
       const p = fx.userData;
-
       if (p.phase === 'idle') {
         p.phase = 'rise'; p.t = 0;
         fx.position.y = p.baseY; fx.material.opacity = 0.35;
@@ -467,7 +469,8 @@
       }
     });
 
-    // モデル回転
+    // ▼ root.rotation は params に毎フレーム同期しているので、
+    //   初期値維持のため params の開始値を MODEL_INIT に合わせてあります
     if (root){
       root.rotation.set(
         THREE.MathUtils.degToRad(params.rotateX),
