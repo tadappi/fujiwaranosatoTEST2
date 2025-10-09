@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>20autorota — three.js viewer (Troika Text版)</title>
+  <title>20autorota — three.js viewer (Troika/esm.sh)</title>
   <style>
     html,body{height:100%;margin:0}
     #app{position:fixed;inset:0;background:#c2c2c2}
@@ -16,20 +16,15 @@
     }
   </style>
 
-  <!-- three & troika をブラウザESMで解決するための importmap -->
+  <!-- three だけ importmap。Troikaは esm.sh から依存込みで取る -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
-      "troika-three-text": "https://unpkg.com/troika-three-text@0.49.1/dist/troika-three-text.esm.js",
-      "troika-three-utils": "https://unpkg.com/troika-three-utils@0.49.1/dist/troika-three-utils.esm.js",
-      "troika-worker-utils": "https://unpkg.com/troika-worker-utils@0.49.1/dist/troika-worker-utils.esm.js",
-      "webgl-sdf-generator": "https://unpkg.com/webgl-sdf-generator@1.1.1/dist/webgl-sdf-generator.esm.js"
+      "three": "https://unpkg.com/three@0.165.0/build/three.module.js"
     }
   }
   </script>
 </head>
-
 <body>
 <div id="app"></div>
 <div class="hint">左:回転 中:パン ホイール:ズーム｜ピン/エリアはホバーで反応・クリックでリンク（寄ってから即切替）</div>
@@ -39,12 +34,12 @@
   import { OrbitControls } from 'https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js';
   import { GLTFLoader } from 'https://unpkg.com/three@0.165.0/examples/jsm/loaders/GLTFLoader.js';
   import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
-  import { Text } from 'troika-three-text';
+  // ★ Troika は esm.sh から。three のバージョンを合わせるのがコツ
+  import { Text } from 'https://esm.sh/troika-three-text@0.49.1?deps=three@0.165.0&target=es2020';
 
   // ========================= 基本セットアップ =========================
   const DEFAULT_BG = '#c2c2c2';
-  // 同じディレクトリに NotoSansJP-Regular.ttf を置いてください
-  const FONT_URL = './NotoSansJP-Regular.ttf';
+  const FONT_URL = './NotoSansJP-Regular.ttf'; // 同階層に置いた日本語フォント
 
   const container = document.getElementById('app');
 
@@ -107,7 +102,7 @@
   let hoverObject = null;
   const areaFxList = [];       // エリア可視ボックス（複数）
 
-  // ========================= 画像（ピンアイコン）キャッシュ =========================
+  // ========================= テクスチャキャッシュ =========================
   const texCache = new Map();
   function loadTex(url){
     if (!url) return null;
@@ -133,8 +128,7 @@
     outlineColor = 0x000000,
     anchorX = 'center',
     anchorY = 'bottom',
-    billboard = true,
-    background = null         // { padX, padY, color, opacity }
+    billboard = true
   }) {
     const t = new Text();
     t.text = text;
@@ -152,27 +146,12 @@
     }
     t.position.set(...pos);
     t.userData = { type: 'labelText', billboard };
-
-    if (background) {
-      const { padX = 0.3, padY = 0.2, color = 0x000000, opacity = 0.35 } = background;
-      t.addEventListener('synccomplete', () => {
-        const b = t.textRenderInfo.blockBounds; // [minX,minY,maxX,maxY]
-        const w = b[2] - b[0], h = b[3] - b[1];
-        const geo = new THREE.PlaneGeometry(w + padX * 2, h + padY * 2, 1, 1);
-        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
-        const bg = new THREE.Mesh(geo, mat);
-        bg.position.z = -0.01;
-        t.add(bg);
-      });
-    }
-
     t.sync(); // レイアウト計算
     if (billboard) textLabels.push(t);
     return t;
   }
 
-  // ========================= ユーティリティ =========================
-  // 青→赤ピン（リンク可、ホバーで色変化＋テキストラベル）
+  // ========================= ピンユーティリティ =========================
   function createPin({
     pos=[0,0,0], href, iconBlue, iconRed,
     scale=3, labelOffset=[0,2,0], labelScale=2,
@@ -194,24 +173,22 @@
       const label = createTextLabel({
         text: labelText,
         pos: labelOffset,
-        // 旧PNG時代の見た目に近づけるため 0.9 を掛けて高さ感を調整
         fontSize: (labelScale) * 0.9,
         ...textOptions
       });
-      label.visible = false; // 既存ホバー表示ロジックに合わせる
+      label.visible = false;
       pin.add(label);
       pin.userData.label = label;
     }
     return pin;
   }
 
-  // 緑ピン：常時緑、ホバーでテキストラベル表示、リンクなし・色変化なし
+  // 緑ピン
   function createGreenPin({
     pos=[0,0,0], scale=3, labelOffset=[0,2,0], labelScale=2,
     labelText='', textOptions={}
   }) {
-    const texPin   = loadTex('./labelpin1green.png'); // ピン画像は従来のまま
-
+    const texPin = loadTex('./labelpin1green.png');
     const matPin = new THREE.SpriteMaterial({ map: texPin, transparent: true });
     const pin = new THREE.Sprite(matPin);
     pin.position.set(...pos);
@@ -230,7 +207,6 @@
       pin.add(label);
       pin.userData.label = label;
     }
-
     return pin;
   }
 
@@ -275,7 +251,7 @@
     controls.target.set(0,0,0);
     controls.update();
 
-    // ===== 青ピン（数値・位置・スケールはそのまま。PNG→文字へ）=====
+    // ===== 青ピン（位置/数値はそのまま、PNG→Text）=====
     const pin1 = createPin({
       pos: [10, 10, -5],
       href: 'https://dazaifu.org/dazaifu-seicho-ato/',
@@ -302,7 +278,7 @@
     });
     scene.add(pin2); clickableObjects.push(pin2);
 
-    // ===== 緑ピン × 5（数値そのまま。PNG→文字へ）=====
+    // ===== 緑ピン × 5（数値そのまま）=====
     const GREEN_PINS = [
       { pos:[  5, 11,  -8], labelText:'無料' },
       { pos:[ 18, 12, -12], labelText:'天空' },
@@ -323,7 +299,7 @@
       clickableObjects.push(p);
     });
 
-    // ===== 直方体エリア：3つ（数値一切変更なし）=====
+    // ===== 直方体エリア：3つ（数値変更なし）=====
     const AREA_DEFS = [
       { center:[  20, 7, 35], size:[ 15, 1, 30], rotYDeg: -14,  color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },
       { center:[ -16, 0,  1], size:[ 15, 1,  22], rotYDeg: -14,  color:0xff7b29, href:'https://example.com/area-2' },
@@ -381,7 +357,7 @@
   fV.add(params, 'rotateSpeed', -3, 3, 0.1).name('Rotate speed').onChange(v=> controls.autoRotateSpeed = v);
   gui.add(params, 'showAxes').name('Show axes').onChange(v=> axes.visible = v);
 
-  // ========================= クリック（寄って即遷移） =========================
+  // ========================= クリック：寄ってから即遷移 =========================
   const _p = new THREE.Vector3();
   const _box = new THREE.Box3();
   const _size = new THREE.Vector3();
@@ -409,16 +385,15 @@
 
     const dir = camera.position.clone().sub(p).normalize();
     const autoCam = p.clone().add(dir.multiplyScalar(desiredDist));
-
     camera.position.copy(autoCam);
     controls.target.copy(p);
-    window.location.href = href;
+
+    window.location.href = href; // 同一タブ
+    // window.open(href, '_blank'); // 新規タブ派はこちら
   });
 
   // ========================= ループ =========================
-  const clock = new THREE.Clock();
   function tick(){
-    // レイキャスト
     raycaster.setFromCamera(mouseNDC, camera);
     const hits = raycaster.intersectObjects(clickableObjects, true);
     let hit = null;
@@ -429,7 +404,6 @@
            : obj;
     }
 
-    // ホバー切替（ピン：色/ラベル）
     if (hoverObject !== hit) {
       if (hoverObject && hoverObject.userData.type === 'pin') {
         if (!hoverObject.userData.noColorSwap) {
@@ -458,7 +432,6 @@
   }
   tick();
 
-  // リサイズ
   window.addEventListener('resize', ()=>{
     const w = container.clientWidth, h = container.clientHeight;
     camera.aspect = w / h;
