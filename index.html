@@ -283,11 +283,11 @@
       clickableObjects.push(p);
     });
 
-    // ===== エリア：3つ =====
+    // ===== 直方体エリア：3つ =====
     const AREA_DEFS = [
-      { center:[  3, 2, 15], size:[ 6, 1, 10], rotYDeg: 10,  color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },
-      { center:[ -6, 0,  0], size:[ 4, 1,  6], rotYDeg:-14,  color:0xff7b29, href:'https://example.com/area-2' },
-      { center:[-25, 7, 15], size:[15, 4, 20], rotYDeg:-15,  color:0x24d18f, href:'https://example.com/area-3' }
+      { center:[  3, 10, 15], size:[ 6, 1, 10], rotYDeg: 10,  color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },
+      { center:[ -6, 10,  0], size:[ 4, 1,  6], rotYDeg:-14,  color:0xff7b29, href:'https://example.com/area-2' },
+      { center:[-25, 10, 15], size:[15, 4, 20], rotYDeg:-15,  color:0x24d18f, href:'https://example.com/area-3' }
     ];
     AREA_DEFS.forEach(def=>{
       const { trigger, fx } = createHoverArea(def);
