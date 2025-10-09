@@ -3,10 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>20autorota — three.js viewer (sRGB + Shadow + GUI + Pins)</title>
+  <title>20autorota — three.js viewer (Troika Text版)</title>
   <style>
     html,body{height:100%;margin:0}
-    /* 読み込み前の下地も同じ色に統一 */
     #app{position:fixed;inset:0;background:#c2c2c2}
     canvas{display:block}
     .hint{
@@ -16,18 +15,20 @@
       padding:6px 8px;border-radius:6px
     }
   </style>
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
 
-    "troika-three-text": "https://unpkg.com/troika-three-text@0.49.1/dist/troika-three-text.esm.js",
-    "troika-three-utils": "https://unpkg.com/troika-three-utils@0.49.1/dist/troika-three-utils.esm.js",
-    "troika-worker-utils": "https://unpkg.com/troika-worker-utils@0.49.1/dist/troika-worker-utils.esm.js"
+  <!-- === importmap: three / troika 系 === -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+      "troika-three-text": "https://unpkg.com/troika-three-text@0.49.1/dist/troika-three-text.esm.js",
+      "troika-three-utils": "https://unpkg.com/troika-three-utils@0.49.1/dist/troika-three-utils.esm.js",
+      "troika-worker-utils": "https://unpkg.com/troika-worker-utils@0.49.1/dist/troika-worker-utils.esm.js"
+    }
   }
-}
-</script>
+  </script>
 </head>
+
 <body>
 <div id="app"></div>
 <div class="hint">左:回転 中:パン ホイール:ズーム｜ピン/エリアはホバーで反応・クリックでリンク（寄ってから即切替）</div>
@@ -37,19 +38,17 @@
   import { OrbitControls } from 'https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js';
   import { GLTFLoader } from 'https://unpkg.com/three@0.165.0/examples/jsm/loaders/GLTFLoader.js';
   import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
-  import { Text } from 'https://unpkg.com/troika-three-text/dist/troika-three-text.esm.js';
+  import { Text } from 'troika-three-text';
 
-  // ========================= 基本セットアップ =========================
-  const DEFAULT_BG = '#c2c2c2'; // ← ここを変えるだけで一括変更OK
-  const FONT_URL = './NotoSansJP-Regular.ttf'; // 日本語用フォント（置けない場合は別フォントに差し替え）
+  // ========================= 基本設定 =========================
+  const DEFAULT_BG = '#c2c2c2';
+  const FONT_URL = 'https://fonts.gstatic.com/s/notosansjp/v52/-F63fjptAgt5VM-kVkqdyU8n3kwq0nB4.woff'; // 日本語OK
 
   const container = document.getElementById('app');
-
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.shadowMap.enabled = true;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -62,510 +61,180 @@
   controls.enableDamping = true;
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.5;
-  controls.target.set(0, 0, 0);
 
-  // ライティング
   const ambient = new THREE.AmbientLight(0xffffff, 1.0);
-  scene.add(ambient);
   const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-  sun.position.set(3, 5, 2).multiplyScalar(100);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.near = 10;
-  sun.shadow.camera.far = 1000;
-  sun.shadow.camera.left = -300;
-  sun.shadow.camera.right = 300;
-  sun.shadow.camera.top = 300;
-  sun.shadow.camera.bottom = -300;
-  scene.add(sun);
-
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.ShadowMaterial({ opacity: 0.25 }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.01;
-  ground.receiveShadow = true;
-  ground.visible = false;
-  scene.add(ground);
+  sun.position.set(300, 500, 200);
+  scene.add(ambient, sun);
 
   const axes = new THREE.AxesHelper(100);
   scene.add(axes);
 
-  // ========================= Raycaster & 状態 =========================
-  const raycaster = new THREE.Raycaster();
-  const mouseNDC = new THREE.Vector2();
-
-  renderer.domElement.addEventListener('pointermove', (e)=>{
-    const r = renderer.domElement.getBoundingClientRect();
-    mouseNDC.x = ((e.clientX - r.left) / r.width) * 2 - 1;
-    mouseNDC.y = -((e.clientY - r.top) / r.height) * 2 + 1;
-  });
-
-  let root = null;
-  const clickableObjects = []; // ピン・エリアtrigger
-  let hoverObject = null;
-  const areaFxList = [];       // エリア可視ボックス（複数）
-
-  // ========================= 画像（ピンアイコン）キャッシュ =========================
-  const texCache = new Map();
-  function loadTex(url){
-    if (!url) return null;
-    if (texCache.has(url)) return texCache.get(url);
-    const t = new THREE.TextureLoader().load(url);
-    texCache.set(url, t);
-    return t;
-  }
-
-  // ========================= Troika Text ラベル =========================
-  const textLabels = []; // billboard用
-
-  function createTextLabel({
-    text = '',
-    pos = [0, 0, 0],
-    fontUrl = FONT_URL,
-    fontSize = 1.2,           // ワールド単位
-    maxWidth = null,          // 折返ししたい時だけ
-    lineHeight = 1.1,
-    letterSpacing = 0,
-    color = 0xffffff,
-    outlineWidth = 0.03,
-    outlineColor = 0x000000,
-    anchorX = 'center',
-    anchorY = 'bottom',
-    billboard = true,
-    background = null         // { padX, padY, color, opacity }
-  }) {
+  // ========================= Troika Text 関数 =========================
+  const textLabels = [];
+  function createTextLabel({text='',pos=[0,0,0],fontSize=1.2,color=0xffffff}) {
     const t = new Text();
     t.text = text;
-    t.font = fontUrl;
+    t.font = FONT_URL;
     t.fontSize = fontSize;
-    if (maxWidth) t.maxWidth = maxWidth;
-    t.lineHeight = lineHeight;
-    t.letterSpacing = letterSpacing;
     t.color = color;
-    t.anchorX = anchorX;
-    t.anchorY = anchorY;
-    if (outlineWidth > 0) {
-      t.outlineWidth = outlineWidth;
-      t.outlineColor = outlineColor;
-    }
+    t.anchorX = 'center';
+    t.anchorY = 'bottom';
+    t.outlineWidth = 0.03;
+    t.outlineColor = 0x000000;
     t.position.set(...pos);
-    t.userData = { type: 'labelText', billboard };
-
-    if (background) {
-      const { padX = 0.3, padY = 0.2, color = 0x000000, opacity = 0.35 } = background;
-      t.addEventListener('synccomplete', () => {
-        const b = t.textRenderInfo.blockBounds; // [minX,minY,maxX,maxY]
-        const w = b[2] - b[0], h = b[3] - b[1];
-        const geo = new THREE.PlaneGeometry(w + padX * 2, h + padY * 2, 1, 1);
-        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
-        const bg = new THREE.Mesh(geo, mat);
-        bg.position.z = -0.01;
-        t.add(bg);
-      });
-    }
-
+    t.userData = { billboard:true };
     t.sync();
-    if (billboard) textLabels.push(t);
+    textLabels.push(t);
     return t;
   }
 
-  // ========================= カメラ飛行ユーティリティ =========================
-  let _flying = false;
-  function flyTo(camera, controls, destPos, destLook, duration = 1600, onDone){
-    if (_flying) return;
-    _flying = true;
+  // ========================= ピン作成 =========================
+  const texCache = new Map();
+  const loadTex = url=>{
+    if(texCache.has(url))return texCache.get(url);
+    const t=new THREE.TextureLoader().load(url);
+    texCache.set(url,t);return t;
+  };
 
-    const startPos  = camera.position.clone();
-    const startLook = controls.target.clone();
-    const easeInOutCubic = (t)=> t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
-    const t0 = performance.now();
-
-    const prevEnabled = controls.enabled;
-    const prevAutoRotate = controls.autoRotate;
-    controls.enabled = false;
-    controls.autoRotate = false;
-
-    function step(now){
-      const t = Math.min(1, (now - t0) / duration);
-      const k = easeInOutCubic(t);
-
-      camera.position.lerpVectors(startPos, destPos, k);
-      controls.target.lerpVectors(startLook, destLook, k);
-      camera.lookAt(controls.target);
-
-      if (t < 1){
-        requestAnimationFrame(step);
-      } else {
-        controls.enabled = prevEnabled;
-        controls.autoRotate = prevAutoRotate;
-        _flying = false;
-        onDone && onDone();
-      }
-    }
-    requestAnimationFrame(step);
-  }
-
-  // ========================= ユーティリティ =========================
-  // 共通：青→赤ピン（リンク可、ホバーで色変化＋テキストラベル）
-  function createPin({
-    pos=[0,0,0], href, iconBlue, iconRed,            // ← ピン画像は従来通り
-    scale=30, labelOffset, labelScale=null,          // 数値そのまま
-    labelText='', textOptions={}                     // ★ PNG廃止 → 文字ラベルへ
-  }) {
-    const texBlue  = loadTex(iconBlue);
-    const texRed   = loadTex(iconRed);
-
-    const matBlue = new THREE.SpriteMaterial({ map: texBlue, transparent: true });
-    const matRed  = new THREE.SpriteMaterial({ map: texRed,  transparent: true });
-
-    const pin = new THREE.Sprite(matBlue);
+  function createPin({pos,href,iconBlue,iconRed,scale=3,labelOffset=[0,2,0],labelText=''}) {
+    const matBlue=new THREE.SpriteMaterial({map:loadTex(iconBlue),transparent:true});
+    const matRed =new THREE.SpriteMaterial({map:loadTex(iconRed),transparent:true});
+    const pin=new THREE.Sprite(matBlue);
     pin.position.set(...pos);
     pin.scale.setScalar(scale);
-    pin.renderOrder = 10;
-    pin.userData = { href, type:'pin', mats:{blue:matBlue, red:matRed}, label:null, noColorSwap:false };
-
-    // Troika Text ラベル（高さ感は旧PNG時代に近づけるため 0.9 を掛ける）
-    if (labelText) {
-      const label = createTextLabel({
-        text: labelText,
-        pos: Array.isArray(labelOffset) ? labelOffset : [0, scale * 1.4, 0],
-        fontSize: (labelScale ?? (scale * 2.0)) * 0.9,
-        ...textOptions
-      });
-      label.visible = false; // 既存ホバー表示ロジックに合わせる
-      pin.add(label);
-      pin.userData.label = label;
-    }
+    pin.userData={href,type:'pin',mats:{blue:matBlue,red:matRed}};
+    const label=createTextLabel({text:labelText,pos:labelOffset,fontSize:scale*0.8});
+    label.visible=false; pin.add(label);
+    pin.userData.label=label;
     return pin;
   }
 
-  // 緑ピン専用：常時緑、ホバーで各テキストラベル表示、リンクなし・色変化なし
-  function createGreenPin({
-    pos=[0,0,0], scale=10, labelOffset=[0, scale*1.4, 0], labelScale=null,
-    labelText='', textOptions={}
-  }) {
-    const texPin   = loadTex('./labelpin1green.png'); // ← ピン画像は従来のまま
-
-    const matPin = new THREE.SpriteMaterial({ map: texPin, transparent: true });
-    const pin = new THREE.Sprite(matPin);
+  function createGreenPin({pos,scale=3,labelOffset=[0,2,0],labelText=''}) {
+    const mat=new THREE.SpriteMaterial({map:loadTex('./labelpin1green.png'),transparent:true});
+    const pin=new THREE.Sprite(mat);
     pin.position.set(...pos);
     pin.scale.setScalar(scale);
-    pin.renderOrder = 10;
-    pin.userData = { type:'pin', mats:{blue:matPin, red:matPin}, label:null, noColorSwap:true, href:null };
-
-    if (labelText) {
-      const label = createTextLabel({
-        text: labelText,
-        pos: labelOffset,
-        fontSize: (labelScale ?? (scale * 2.0)) * 0.9,
-        ...textOptions
-      });
-      label.visible = false;
-      pin.add(label);
-      pin.userData.label = label;
-    }
-
+    pin.userData={type:'pin',noColorSwap:true};
+    const label=createTextLabel({text:labelText,pos:labelOffset,fontSize:scale*0.8});
+    label.visible=false; pin.add(label);
+    pin.userData.label=label;
     return pin;
   }
 
-  // エリア（Y回転可）
-  function createHoverArea({ center=[0,0,0], size=[30,10,30], rotYDeg=0, href, color=0x2a6cff }) {
-    const trigger = new THREE.Mesh(
-      new THREE.BoxGeometry(...size),
-      new THREE.MeshBasicMaterial({ transparent:true, opacity:0.0 })
-    );
+  // ========================= エリア =========================
+  const areaFxList=[];
+  function createHoverArea({center,size,rotYDeg,href,color}) {
+    const trigger=new THREE.Mesh(new THREE.BoxGeometry(...size),
+      new THREE.MeshBasicMaterial({transparent:true,opacity:0}));
     trigger.position.set(...center);
-    trigger.rotation.y = THREE.MathUtils.degToRad(rotYDeg);
-    trigger.userData = { type:'area', href, rotYDeg };
-
-    const fx = new THREE.Mesh(
-      new THREE.BoxGeometry(size[0]*1.02, size[1], size[2]*1.02),
-      new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0.35, depthWrite:false })
-    );
+    trigger.rotation.y=THREE.MathUtils.degToRad(rotYDeg);
+    trigger.userData={type:'area',href};
+    const fx=new THREE.Mesh(new THREE.BoxGeometry(size[0]*1.02,size[1],size[2]*1.02),
+      new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.35,depthWrite:false}));
     fx.position.set(...center);
-    fx.rotation.y = THREE.MathUtils.degToRad(rotYDeg);
-    fx.visible = false;
-    fx.userData = { baseY:center[1], t:0, phase:'idle' };
-
-    trigger.userData.fx = fx;
-    return { trigger, fx };
+    fx.rotation.y=THREE.MathUtils.degToRad(rotYDeg);
+    fx.visible=false;
+    trigger.userData.fx=fx;
+    areaFxList.push(fx);
+    return {trigger,fx};
   }
 
-  // ========================= モデル読込 =========================
-  const gltfLoader = new GLTFLoader();
-  gltfLoader.load('./100.glb', (gltf) => {
-    root = gltf.scene;
-    root.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = false; }});
+  // ========================= GLB 読み込み =========================
+  const clickableObjects=[];
+  let root=null;
+  const gltfLoader=new GLTFLoader();
+  gltfLoader.load('./100.glb',g=>{
+    root=g.scene;
     scene.add(root);
 
-    // フィット
-    const box = new THREE.Box3().setFromObject(root);
-    const size = new THREE.Vector3(), center = new THREE.Vector3();
-    box.getSize(size); box.getCenter(center);
-    root.position.sub(center);
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const dist = maxDim * 1.6;
-    camera.position.set(dist*0.3, dist*0.2, dist*0.3);
-    controls.target.set(0,0,0);
-    controls.update();
-
-    // ===== 青ピン（数値はそのまま／labelTextに置換）=====
-    const pin1 = createPin({
-      pos: [10, 10, -5],
-      href: 'https://dazaifu.org/dazaifu-seicho-ato/',
-      iconBlue: './pin1blue.png',
-      iconRed:  './pin1red.png',
-      scale: 3,
-      labelOffset: [0, 2, 0],
-      labelScale: 2,
-      labelText: 'seicho',
-      textOptions: { fontUrl: FONT_URL, outlineWidth: 0.03, outlineColor: 0x000000 }
+    // === ピン ===
+    const pin1=createPin({
+      pos:[10,10,-5],
+      href:'https://dazaifu.org/',
+      iconBlue:'./pin1blue.png',
+      iconRed:'./pin1red.png',
+      scale:3,
+      labelOffset:[0,2,0],
+      labelText:'政庁跡'
     });
     root.add(pin1); clickableObjects.push(pin1);
 
-    const pin2 = createPin({
-      pos: [20, 10, -15],
-      href: 'https://dazaifu.org/dazaifu-seicho-ato/',
-      iconBlue: './pin1blue.png',
-      iconRed:  './pin1red.png',
-      scale: 3,
-      labelOffset: [0, 2, 0],
-      labelScale: 2,
-      labelText: 'seicho',
-      textOptions: { fontUrl: FONT_URL, outlineWidth: 0.03, outlineColor: 0x000000 }
+    const pin2=createPin({
+      pos:[20,10,-15],
+      href:'https://dazaifu.org/',
+      iconBlue:'./pin1blue.png',
+      iconRed:'./pin1red.png',
+      scale:3,
+      labelOffset:[0,2,0],
+      labelText:'大宰府跡'
     });
     root.add(pin2); clickableObjects.push(pin2);
 
-    // ===== 緑ピン × 5（数値はそのまま／labelTextに置換）=====
-    const GREEN_PINS = [
-      { pos:[  5, 11,  -8], labelText:'muryou' },
-      { pos:[ 18, 12, -12], labelText:'tenku'  },
-      { pos:[-10, 10,  14], labelText:'tyuson' },
-      { pos:[ 30, 13,   6], labelText:'yoshi'  },
-      { pos:[-22, 11,  -4], labelText:'enmei'  },
+    // === 緑ピン ===
+    const greens=[
+      {pos:[5,11,-8],labelText:'無料駐車場'},
+      {pos:[18,12,-12],labelText:'天空カフェ'},
+      {pos:[-10,10,14],labelText:'中尊寺'},
+      {pos:[30,13,6],labelText:'義経堂'},
+      {pos:[-22,11,-4],labelText:'延命地蔵'}
     ];
-    GREEN_PINS.forEach(({pos, labelText})=>{
-      const p = createGreenPin({
-        pos,
-        scale: 3,
-        labelOffset:[0,2,0],
-        labelScale:2,
-        labelText,
-        textOptions: { fontUrl: FONT_URL, outlineWidth: 0.03, outlineColor: 0x000000 }
-      });
-      root.add(p);
-      clickableObjects.push(p);
+    greens.forEach(d=>{
+      const p=createGreenPin({...d});
+      root.add(p); clickableObjects.push(p);
     });
 
-    // ===== 直方体エリア：3つ（数値変更なし）=====
-    const AREA_DEFS = [
-      { center:[  20, 7, 35], size:[ 15, 1, 30], rotYDeg: -14, color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },  //青
-      { center:[ -16, 0,  1], size:[ 15, 1,  22], rotYDeg: -14, color:0xff7b29, href:'https://example.com/area-2' },           //橙
-      { center:[ -27, 0, 22], size:[  9, 1,  18], rotYDeg: -15, color:0x24d18f, href:'https://example.com/area-3' }            //緑
+    // === エリア ===
+    const defs=[
+      {center:[20,7,35],size:[15,1,30],rotYDeg:-14,href:'https://oki-park.jp/shurijo/guide/51',color:0x2a6cff},
+      {center:[-16,0,1],size:[15,1,22],rotYDeg:-14,href:'https://example.com/area2',color:0xff7b29},
+      {center:[-27,0,22],size:[9,1,18],rotYDeg:-15,href:'https://example.com/area3',color:0x24d18f}
     ];
-    AREA_DEFS.forEach(def=>{
-      const { trigger, fx } = createHoverArea(def);
-      root.add(trigger); root.add(fx);
-      clickableObjects.push(trigger); areaFxList.push(fx);
-    });
-
-  }, undefined, (err)=>{
-    console.error(err);
-    alert('GLBの読み込みに失敗しました。パス/ファイル名をご確認ください。');
-  });
-
-  // ========================= GUI =========================
-  const gui = new GUI({ title: 'Controls' });
-  const params = {
-    background: DEFAULT_BG,
-    ambientIntensity: ambient.intensity,
-    sunIntensity: sun.intensity,
-    sunElevDeg: 35,
-    sunAziDeg: 25,
-    autoRotate: controls.autoRotate,
-    rotateSpeed: controls.autoRotateSpeed,
-    showGroundShadow: ground.visible,
-    showAxes: true,
-    rotateX: 0, rotateY: 0, rotateZ: 0
-  };
-  const upSun = ()=>{
-    const elev = THREE.MathUtils.degToRad(params.sunElevDeg);
-    const azi  = THREE.MathUtils.degToRad(params.sunAziDeg);
-    const r = 100;
-    sun.position.set(r*Math.cos(elev)*Math.cos(azi), r*Math.sin(elev), r*Math.cos(elev)*Math.sin(azi));
-  };
-  upSun();
-
-  gui.addColor(params, 'background').name('Background')
-     .onChange(v=> scene.background = new THREE.Color(v));
-  const fL = gui.addFolder('Lighting');
-  fL.add(params, 'ambientIntensity', 0, 2.5, 0.01).name('Ambient')
-    .onChange(v=> ambient.intensity = v);
-  fL.add(params, 'sunIntensity', 0, 3, 0.01).name('Sun')
-    .onChange(v=> sun.intensity = v);
-  fL.add(params, 'sunElevDeg', 0, 90, 1).name('Sun Elev [deg]').onChange(upSun);
-  fL.add(params, 'sunAziDeg', -180, 180, 1).name('Sun Azi [deg]').onChange(upSun);
-  fL.add(params, 'showGroundShadow').name('Ground shadow').onChange(v=> ground.visible = v);
-  const fM = gui.addFolder('Model Rotation');
-  fM.add(params, 'rotateX', -180, 180, 1).name('Rotate X [deg]');
-  fM.add(params, 'rotateY', -180, 180, 1).name('Rotate Y [deg]');
-  fM.add(params, 'rotateZ', -180, 180, 1).name('Rotate Z [deg]');
-  const fV = gui.addFolder('View');
-  fV.add(params, 'autoRotate').name('Auto rotate').onChange(v=> controls.autoRotate = v);
-  fV.add(params, 'rotateSpeed', -3, 3, 0.1).name('Rotate speed').onChange(v=> controls.autoRotateSpeed = v);
-  gui.add(params, 'showAxes').name('Show axes').onChange(v=> axes.visible = v);
-
-  // Area FX（上昇→フェードのスピード/高さ）
-  const fxParams = { height: 8, riseSec: 2.5, fadeSec: 1.2 };
-  const fFx = gui.addFolder('Area FX');
-  fFx.add(fxParams, 'height', 1, 40, 0.5).name('Rise height');
-  fFx.add(fxParams, 'riseSec', 0.2, 6, 0.1).name('Rise sec');
-  fFx.add(fxParams, 'fadeSec', 0.2, 6, 0.1).name('Fade sec');
-
-  // ========================= クリック：必ず“寄り”→即遷移 =========================
-  const _p = new THREE.Vector3();
-  const _box = new THREE.Box3();
-  const _size = new THREE.Vector3();
-
-  renderer.domElement.addEventListener('click', ()=>{
-    if (!hoverObject || _flying) return;
-
-    const ud = hoverObject.userData || {};
-    const href = ud.href;
-    if (!href) return; // リンク無しは何もしない（緑ピンなど）
-
-    // クリック対象のワールド座標 p
-    hoverObject.getWorldPosition(_p);
-    const p = _p.clone();
-
-    // 現カメラ→p の直線上で、内側に到達点を作る
-    const d0 = camera.position.distanceTo(p);
-
-    // 目標までの希望距離（“寄り”の強さ）
-    let desiredDist;
-    if (hoverObject.isMesh) {
-      // エリア：自身のサイズから決定
-      _box.setFromObject(hoverObject);
-      _box.getSize(_size);
-      const r = Math.max(_size.x, _size.y, _size.z) * 0.5;
-      desiredDist = THREE.MathUtils.clamp(r * 2.2, 10, 120);
-    } else {
-      // ピン：現距離の35%まで寄る
-      desiredDist = THREE.MathUtils.clamp(d0 * 0.35, 10, 120);
-    }
-
-    // 同一直線上で内側へ
-    const dir = camera.position.clone().sub(p).normalize(); // p→camera 方向
-    const autoCam = p.clone().add(dir.multiplyScalar(desiredDist));
-
-    // 明示指定があれば優先
-    const destPos = (ud.camPos instanceof THREE.Vector3) ? ud.camPos.clone() : autoCam;
-    const lookAt  = (ud.lookAt instanceof THREE.Vector3) ? ud.lookAt.clone() : p.clone();
-    const duration = (typeof ud.flyMs === 'number') ? ud.flyMs : 1500;
-
-    flyTo(camera, controls, destPos, lookAt, duration, ()=>{
-      window.location.href = href; // 同一タブ
-      // window.open(href, '_blank'); // 新規タブ派
+    defs.forEach(d=>{
+      const {trigger,fx}=createHoverArea(d);
+      root.add(trigger,fx); clickableObjects.push(trigger);
     });
   });
 
-  // ========================= ループ =========================
-  const clock = new THREE.Clock();
-  const easeOutCubic = x => 1 - Math.pow(1 - x, 3);
-  const easeInQuad   = x => x * x;
+  // ========================= Hover & Render =========================
+  const raycaster=new THREE.Raycaster();
+  const mouseNDC=new THREE.Vector2();
+  renderer.domElement.addEventListener('pointermove',e=>{
+    const r=renderer.domElement.getBoundingClientRect();
+    mouseNDC.x=((e.clientX-r.left)/r.width)*2-1;
+    mouseNDC.y=-((e.clientY-r.top)/r.height)*2+1;
+  });
+  let hover=null;
 
-  function tick(){
-    const dt = clock.getDelta();
+  function animate(){
+    requestAnimationFrame(animate);
+    raycaster.setFromCamera(mouseNDC,camera);
+    const hit=raycaster.intersectObjects(clickableObjects,true)[0]?.object||null;
 
-    // レイキャスト
-    raycaster.setFromCamera(mouseNDC, camera);
-    const hits = raycaster.intersectObjects(clickableObjects, true);
-    let hit = null;
-    if (hits.length){
-      const obj = hits[0].object;
-      hit = (obj.userData?.type) ? obj
-           : (obj.parent?.userData?.type) ? obj.parent
-           : obj;
+    if(hover!==hit){
+      if(hover?.userData?.type==='pin'){
+        if(!hover.userData.noColorSwap)hover.material=hover.userData.mats.blue;
+        if(hover.userData.label)hover.userData.label.visible=false;
+      }
+      hover=hit;
+      if(hover?.userData?.type==='pin'){
+        if(!hover.userData.noColorSwap)hover.material=hover.userData.mats.red;
+        if(hover.userData.label)hover.userData.label.visible=true;
+      }
     }
 
-    // ホバー切替（ピン：色/ラベル）
-    if (hoverObject !== hit) {
-      if (hoverObject && hoverObject.userData.type === 'pin') {
-        if (!hoverObject.userData.noColorSwap) {
-          hoverObject.material = hoverObject.userData.mats.blue;
-        }
-        if (hoverObject.userData.label) hoverObject.userData.label.visible = false;
-      }
-      hoverObject = hit;
-      if (hoverObject && hoverObject.userData.type === 'pin') {
-        if (!hoverObject.userData.noColorSwap) {
-          hoverObject.material = hoverObject.userData.mats.red;
-        }
-        if (hoverObject.userData.label) hoverObject.userData.label.visible = true;
-      }
-      renderer.domElement.style.cursor = hoverObject ? 'pointer' : 'default';
-    }
-
-    // エリアFX：ホバー中のものだけ演出
-    areaFxList.forEach(fx=>{
-      const isActive = (hoverObject && hoverObject.userData.type === 'area' && hoverObject.userData.fx === fx);
-
-      if (!isActive) {
-        fx.visible = false;
-        fx.userData.phase = 'idle';
-        fx.userData.t = 0;
-        fx.position.y = fx.userData.baseY;
-        fx.material.opacity = 0.35;
-        return;
-      }
-
-      fx.visible = true;
-      const p = fx.userData;
-
-      if (p.phase === 'idle') {
-        p.phase = 'rise'; p.t = 0;
-        fx.position.y = p.baseY; fx.material.opacity = 0.35;
-      } else if (p.phase === 'rise') {
-        p.t += dt;
-        const k = Math.min(1, p.t / fxParams.riseSec);
-        fx.position.y = p.baseY + fxParams.height * easeOutCubic(k);
-        fx.material.opacity = 0.35;
-        if (k >= 1) { p.phase = 'fade'; p.t = 0; }
-      } else if (p.phase === 'fade') {
-        p.t += dt;
-        const k = Math.min(1, p.t / fxParams.fadeSec);
-        fx.position.y = p.baseY + fxParams.height;
-        fx.material.opacity = 0.35 * (1 - easeInQuad(k));
-        if (k >= 1) { p.phase = 'rise'; p.t = 0; fx.position.y = p.baseY; fx.material.opacity = 0.35; }
-      }
-    });
-
-    // モデル回転
-    if (root){
-      root.rotation.set(
-        THREE.MathUtils.degToRad(params.rotateX),
-        THREE.MathUtils.degToRad(params.rotateY),
-        THREE.MathUtils.degToRad(params.rotateZ)
-      );
-    }
-
-    // ★ Troikaテキストを常にカメラ正対（ビルボード）
-    textLabels.forEach(t => {
-      if (t.userData?.billboard) t.quaternion.copy(camera.quaternion);
-    });
-
+    textLabels.forEach(t=>t.quaternion.copy(camera.quaternion));
     controls.update();
-    renderer.render(scene, camera);
-    requestAnimationFrame(tick);
+    renderer.render(scene,camera);
   }
-  tick();
+  animate();
 
-  // リサイズ
-  window.addEventListener('resize', ()=>{
-    const w = container.clientWidth, h = container.clientHeight;
-    camera.aspect = w / h;
+  window.addEventListener('resize',()=>{
+    camera.aspect=container.clientWidth/container.clientHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
+    renderer.setSize(container.clientWidth,container.clientHeight);
   });
 </script>
 </body>
 </html>
+
