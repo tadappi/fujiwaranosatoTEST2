@@ -176,7 +176,7 @@
 
   // 緑ピン専用：常時緑、ホバーで各ラベル表示、リンクなし・色変化なし
   function createGreenPin({
-    pos=[0,0,0], labelPng, scale=1, labelOffset=[0, scale*1.4, 0], labelScale=null
+    pos=[0,0,0], labelPng, scale=10, labelOffset=[0, scale*1.4, 0], labelScale=null
   }) {
     const texPin   = loadTex('./labelpin1green.png');
     const texLabel = loadTex(labelPng);
