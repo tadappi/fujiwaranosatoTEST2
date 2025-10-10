@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>20autorota — three.js viewer (Troika/esm.sh)</title>
+  <title>20autorota — three.js viewer (sRGB + Shadow + GUI + Pins)</title>
   <style>
     html,body{height:100%;margin:0}
+    /* 読み込み前の下地も同じ色に統一 */
     #app{position:fixed;inset:0;background:#c2c2c2}
     canvas{display:block}
     .hint{
@@ -16,13 +17,10 @@
     }
   </style>
 
-  <!-- three だけ importmap。Troikaは esm.sh から依存込みで取る -->
   <script type="importmap">
-  {
-    "imports": {
+  { "imports": {
       "three": "https://unpkg.com/three@0.165.0/build/three.module.js"
-    }
-  }
+    } }
   </script>
 </head>
 <body>
@@ -34,12 +32,9 @@
   import { OrbitControls } from 'https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js';
   import { GLTFLoader } from 'https://unpkg.com/three@0.165.0/examples/jsm/loaders/GLTFLoader.js';
   import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
-  // ★ Troika は esm.sh から。three のバージョンを合わせるのがコツ
-  import { Text } from 'https://esm.sh/troika-three-text@0.49.1?deps=three@0.165.0&target=es2020';
 
   // ========================= 基本セットアップ =========================
-  const DEFAULT_BG = '#c2c2c2';
-  const FONT_URL = './NotoSansJP-Regular.ttf'; // 同階層に置いた日本語フォント
+  const DEFAULT_BG = '#c2c2c2'; // ← ここを変えるだけで一括変更OK
 
   const container = document.getElementById('app');
 
@@ -51,7 +46,7 @@
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(DEFAULT_BG);
+  scene.background = new THREE.Color(DEFAULT_BG); // ★致命因の修正ポイント
 
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 5000);
   camera.position.set(0, 40, 80);
@@ -112,53 +107,50 @@
     return t;
   }
 
-  // ========================= Troika Text ラベル =========================
-  const textLabels = []; // billboard用
+  // ========================= カメラ飛行ユーティリティ =========================
+  let _flying = false;
+  function flyTo(camera, controls, destPos, destLook, duration = 1600, onDone){
+    if (_flying) return;
+    _flying = true;
 
-  function createTextLabel({
-    text = '',
-    pos = [0, 0, 0],
-    fontUrl = FONT_URL,
-    fontSize = 1.2,           // ワールド単位（高さ）
-    maxWidth = null,          // 折返ししたい時だけ
-    lineHeight = 1.1,
-    letterSpacing = 0,
-    color = 0xffffff,
-    outlineWidth = 0.03,
-    outlineColor = 0x000000,
-    anchorX = 'center',
-    anchorY = 'bottom',
-    billboard = true
-  }) {
-    const t = new Text();
-    t.text = text;
-    t.font = fontUrl;
-    t.fontSize = fontSize;
-    if (maxWidth) t.maxWidth = maxWidth;
-    t.lineHeight = lineHeight;
-    t.letterSpacing = letterSpacing;
-    t.color = color;
-    t.anchorX = anchorX;
-    t.anchorY = anchorY;
-    if (outlineWidth > 0) {
-      t.outlineWidth = outlineWidth;
-      t.outlineColor = outlineColor;
+    const startPos  = camera.position.clone();
+    const startLook = controls.target.clone();
+    const easeInOutCubic = (t)=> t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+    const t0 = performance.now();
+
+    const prevEnabled = controls.enabled;
+    const prevAutoRotate = controls.autoRotate; // 一時停止
+    controls.enabled = false;
+    controls.autoRotate = false;
+
+    function step(now){
+      const t = Math.min(1, (now - t0) / duration);
+      const k = easeInOutCubic(t);
+
+      camera.position.lerpVectors(startPos, destPos, k);
+      controls.target.lerpVectors(startLook, destLook, k);
+      camera.lookAt(controls.target);
+
+      if (t < 1){
+        requestAnimationFrame(step);
+      } else {
+        controls.enabled = prevEnabled;
+        controls.autoRotate = prevAutoRotate;
+        _flying = false;
+        onDone && onDone();
+      }
     }
-    t.position.set(...pos);
-    t.userData = { type: 'labelText', billboard };
-    t.sync(); // レイアウト計算
-    if (billboard) textLabels.push(t);
-    return t;
+    requestAnimationFrame(step);
   }
 
-  // ========================= ピンユーティリティ =========================
+  // ========================= ユーティリティ =========================
+  // 共通：青→赤ピン（リンク可、ホバーで色変化＋ラベル）
   function createPin({
-    pos=[0,0,0], href, iconBlue, iconRed,
-    scale=3, labelOffset=[0,2,0], labelScale=2,
-    labelText='', textOptions={}
+    pos=[0,0,0], href, iconBlue, iconRed, labelPng, scale=30, labelOffset, labelScale=null
   }) {
     const texBlue  = loadTex(iconBlue);
     const texRed   = loadTex(iconRed);
+    const texLabel = labelPng ? loadTex(labelPng) : null;
 
     const matBlue = new THREE.SpriteMaterial({ map: texBlue, transparent: true });
     const matRed  = new THREE.SpriteMaterial({ map: texRed,  transparent: true });
@@ -169,13 +161,12 @@
     pin.renderOrder = 10;
     pin.userData = { href, type:'pin', mats:{blue:matBlue, red:matRed}, label:null, noColorSwap:false };
 
-    if (labelText) {
-      const label = createTextLabel({
-        text: labelText,
-        pos: labelOffset,
-        fontSize: (labelScale) * 0.9,
-        ...textOptions
-      });
+    if (texLabel) {
+      const matLabel = new THREE.SpriteMaterial({ map: texLabel, transparent: true, depthTest: true });
+      const label = new THREE.Sprite(matLabel);
+      label.scale.setScalar(labelScale ?? (scale * 2.0));
+      const offset = Array.isArray(labelOffset) ? labelOffset : [0, scale * 1.4, 0];
+      label.position.set(...offset);
       label.visible = false;
       pin.add(label);
       pin.userData.label = label;
@@ -183,12 +174,13 @@
     return pin;
   }
 
-  // 緑ピン
+  // 緑ピン専用：常時緑、ホバーで各ラベル表示、リンクなし・色変化なし
   function createGreenPin({
-    pos=[0,0,0], scale=3, labelOffset=[0,2,0], labelScale=2,
-    labelText='', textOptions={}
+    pos=[0,0,0], labelPng, scale=10, labelOffset=[0, scale*1.4, 0], labelScale=null
   }) {
-    const texPin = loadTex('./labelpin1green.png');
+    const texPin   = loadTex('./labelpin1green.png');
+    const texLabel = loadTex(labelPng);
+
     const matPin = new THREE.SpriteMaterial({ map: texPin, transparent: true });
     const pin = new THREE.Sprite(matPin);
     pin.position.set(...pos);
@@ -196,17 +188,14 @@
     pin.renderOrder = 10;
     pin.userData = { type:'pin', mats:{blue:matPin, red:matPin}, label:null, noColorSwap:true, href:null };
 
-    if (labelText) {
-      const label = createTextLabel({
-        text: labelText,
-        pos: labelOffset,
-        fontSize: (labelScale) * 0.9,
-        ...textOptions
-      });
-      label.visible = false;
-      pin.add(label);
-      pin.userData.label = label;
-    }
+    const matLabel = new THREE.SpriteMaterial({ map: texLabel, transparent: true, depthTest: true });
+    const label = new THREE.Sprite(matLabel);
+    label.scale.setScalar(labelScale ?? (scale * 2.0));
+    label.position.set(...labelOffset);
+    label.visible = false;
+    pin.add(label);
+    pin.userData.label = label;
+
     return pin;
   }
 
@@ -240,7 +229,7 @@
     root.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = false; }});
     scene.add(root);
 
-    // フィット（元のまま）
+    // フィット
     const box = new THREE.Box3().setFromObject(root);
     const size = new THREE.Vector3(), center = new THREE.Vector3();
     box.getSize(size); box.getCenter(center);
@@ -251,63 +240,60 @@
     controls.target.set(0,0,0);
     controls.update();
 
-    // ===== 青ピン（位置/数値はそのまま、PNG→Text）=====
+    // ===== 青ピン =====
     const pin1 = createPin({
       pos: [10, 10, -5],
       href: 'https://dazaifu.org/dazaifu-seicho-ato/',
       iconBlue: './pin1blue.png',
       iconRed:  './pin1red.png',
+      labelPng: './seicho.png',
       scale: 3,
       labelOffset: [0, 2, 0],
       labelScale: 2,
-      labelText: '政庁跡',
-      textOptions: { fontUrl: FONT_URL, outlineWidth: 0.03, outlineColor: 0x000000 }
     });
-    scene.add(pin1); clickableObjects.push(pin1);
+    root.add(pin1); clickableObjects.push(pin1);
 
     const pin2 = createPin({
       pos: [20, 10, -15],
       href: 'https://dazaifu.org/dazaifu-seicho-ato/',
       iconBlue: './pin1blue.png',
       iconRed:  './pin1red.png',
+      labelPng: './seicho.png',
       scale: 3,
       labelOffset: [0, 2, 0],
       labelScale: 2,
-      labelText: '大宰府跡',
-      textOptions: { fontUrl: FONT_URL, outlineWidth: 0.03, outlineColor: 0x000000 }
     });
-    scene.add(pin2); clickableObjects.push(pin2);
+    root.add(pin2); clickableObjects.push(pin2);
 
-    // ===== 緑ピン × 5（数値そのまま）=====
+    // ===== 緑ピン × 5 =====
     const GREEN_PINS = [
-      { pos:[  5, 11,  -8], labelText:'無料' },
-      { pos:[ 18, 12, -12], labelText:'天空' },
-      { pos:[-10, 10,  14], labelText:'中尊寺' },
-      { pos:[ 30, 13,   6], labelText:'義経堂' },
-      { pos:[-22, 11,  -4], labelText:'延命地蔵' },
+      { pos:[  5, 11,  -8], label:'./muryou.png' },
+      { pos:[ 18, 12, -12], label:'./tenku.png' },
+      { pos:[-10, 10,  14], label:'./tyuson.png' },
+      { pos:[ 30, 13,   6], label:'./yoshi.png' },
+      { pos:[-22, 11,  -4], label:'./enmei.png' },
     ];
-    GREEN_PINS.forEach(({pos, labelText})=>{
+    GREEN_PINS.forEach(({pos, label})=>{
       const p = createGreenPin({
         pos,
+        labelPng: label,
         scale: 3,
         labelOffset:[0,2,0],
         labelScale:2,
-        labelText,
-        textOptions: { fontUrl: FONT_URL, outlineWidth: 0.03, outlineColor: 0x000000 }
       });
-      scene.add(p);
+      root.add(p);
       clickableObjects.push(p);
     });
 
-    // ===== 直方体エリア：3つ（数値変更なし）=====
+    // ===== 直方体エリア：3つ =====
     const AREA_DEFS = [
-      { center:[  20, 7, 35], size:[ 15, 1, 30], rotYDeg: -14,  color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },
-      { center:[ -16, 0,  1], size:[ 15, 1,  22], rotYDeg: -14,  color:0xff7b29, href:'https://example.com/area-2' },
-      { center:[ -27, 0, 22], size:[  9, 1,  18], rotYDeg: -15,  color:0x24d18f, href:'https://example.com/area-3' }
+      { center:[  20, 7, 35], size:[ 15, 1, 30], rotYDeg: -14,  color:0x2a6cff, href:'https://oki-park.jp/shurijo/guide/51' },  //青
+      { center:[ -16, 0,  1], size:[ 15, 1,  22], rotYDeg:-14,  color:0xff7b29, href:'https://example.com/area-2' },　　//橙
+      { center:[-27, 0, 22], size:[9, 1, 18], rotYDeg:-15,  color:0x24d18f, href:'https://example.com/area-3' }     //緑
     ];
     AREA_DEFS.forEach(def=>{
       const { trigger, fx } = createHoverArea(def);
-      scene.add(trigger); scene.add(fx);
+      root.add(trigger); root.add(fx);
       clickableObjects.push(trigger); areaFxList.push(fx);
     });
 
@@ -319,7 +305,7 @@
   // ========================= GUI =========================
   const gui = new GUI({ title: 'Controls' });
   const params = {
-    background: DEFAULT_BG,
+    background: DEFAULT_BG,                 // GUIの初期値も統一
     ambientIntensity: ambient.intensity,
     sunIntensity: sun.intensity,
     sunElevDeg: 35,
@@ -328,7 +314,7 @@
     rotateSpeed: controls.autoRotateSpeed,
     showGroundShadow: ground.visible,
     showAxes: true,
-    rotateX: 0, rotateY: 0, rotateZ: 0
+    rotateX: 0, rotateY: 0, rotateZ: 0    // ←モデルだけの角度
   };
   const upSun = ()=>{
     const elev = THREE.MathUtils.degToRad(params.sunElevDeg);
@@ -357,43 +343,70 @@
   fV.add(params, 'rotateSpeed', -3, 3, 0.1).name('Rotate speed').onChange(v=> controls.autoRotateSpeed = v);
   gui.add(params, 'showAxes').name('Show axes').onChange(v=> axes.visible = v);
 
-  // ========================= クリック：寄ってから即遷移 =========================
+  // Area FX（上昇→フェードのスピード/高さ）
+  const fxParams = { height: 8, riseSec: 2.5, fadeSec: 1.2 };
+  const fFx = gui.addFolder('Area FX');
+  fFx.add(fxParams, 'height', 1, 40, 0.5).name('Rise height');
+  fFx.add(fxParams, 'riseSec', 0.2, 6, 0.1).name('Rise sec');
+  fFx.add(fxParams, 'fadeSec', 0.2, 6, 0.1).name('Fade sec');
+
+  // ========================= クリック：必ず“寄り”→即遷移 =========================
   const _p = new THREE.Vector3();
   const _box = new THREE.Box3();
   const _size = new THREE.Vector3();
 
   renderer.domElement.addEventListener('click', ()=>{
-    if (!hoverObject) return;
+    if (!hoverObject || _flying) return;
 
     const ud = hoverObject.userData || {};
     const href = ud.href;
-    if (!href) return;
+    if (!href) return; // リンク無しは何もしない（緑ピンなど）
 
+    // クリック対象のワールド座標 p
     hoverObject.getWorldPosition(_p);
     const p = _p.clone();
 
+    // 現カメラ→p の直線上で、内側に到達点を作る
     const d0 = camera.position.distanceTo(p);
+
+    // 目標までの希望距離（“寄り”の強さ）
     let desiredDist;
     if (hoverObject.isMesh) {
+      // エリア：自身のサイズから決定
       _box.setFromObject(hoverObject);
       _box.getSize(_size);
       const r = Math.max(_size.x, _size.y, _size.z) * 0.5;
       desiredDist = THREE.MathUtils.clamp(r * 2.2, 10, 120);
     } else {
+      // ピン：現距離の35%まで寄る
       desiredDist = THREE.MathUtils.clamp(d0 * 0.35, 10, 120);
     }
 
-    const dir = camera.position.clone().sub(p).normalize();
+    // 同一直線上で内側へ
+    const dir = camera.position.clone().sub(p).normalize(); // p→camera 方向
     const autoCam = p.clone().add(dir.multiplyScalar(desiredDist));
-    camera.position.copy(autoCam);
-    controls.target.copy(p);
 
-    window.location.href = href; // 同一タブ
-    // window.open(href, '_blank'); // 新規タブ派はこちら
+    // 明示指定があれば優先
+    const destPos = (ud.camPos instanceof THREE.Vector3) ? ud.camPos.clone() : autoCam;
+    const lookAt  = (ud.lookAt instanceof THREE.Vector3) ? ud.lookAt.clone() : p.clone();
+    const duration = (typeof ud.flyMs === 'number') ? ud.flyMs : 1500;
+
+    flyTo(camera, controls, destPos, lookAt, duration, ()=>{
+      // 到達したら即遷移（間髪入れずに）
+      window.location.href = href;     // 同一タブ
+      // window.open(href, '_blank');  // 新規タブ派ならこちら
+    });
   });
 
   // ========================= ループ =========================
+  const clock = new THREE.Clock();
+  const easeOutCubic = x => 1 - Math.pow(1 - x, 3);
+  const easeInQuad   = x => x * x;
+
   function tick(){
+    const dt = clock.getDelta();
+
+    // レイキャスト
     raycaster.setFromCamera(mouseNDC, camera);
     const hits = raycaster.intersectObjects(clickableObjects, true);
     let hit = null;
@@ -404,6 +417,7 @@
            : obj;
     }
 
+    // ホバー切替（ピン：色/ラベル）
     if (hoverObject !== hit) {
       if (hoverObject && hoverObject.userData.type === 'pin') {
         if (!hoverObject.userData.noColorSwap) {
@@ -421,10 +435,48 @@
       renderer.domElement.style.cursor = hoverObject ? 'pointer' : 'default';
     }
 
-    // テキストは常にカメラ正対
-    textLabels.forEach(t => {
-      if (t.userData?.billboard) t.quaternion.copy(camera.quaternion);
+    // エリアFX：ホバー中のものだけ演出
+    areaFxList.forEach(fx=>{
+      const isActive = (hoverObject && hoverObject.userData.type === 'area' && hoverObject.userData.fx === fx);
+
+      if (!isActive) {
+        fx.visible = false;
+        fx.userData.phase = 'idle';
+        fx.userData.t = 0;
+        fx.position.y = fx.userData.baseY;
+        fx.material.opacity = 0.35;
+        return;
+      }
+
+      fx.visible = true;
+      const p = fx.userData;
+
+      if (p.phase === 'idle') {
+        p.phase = 'rise'; p.t = 0;
+        fx.position.y = p.baseY; fx.material.opacity = 0.35;
+      } else if (p.phase === 'rise') {
+        p.t += dt;
+        const k = Math.min(1, p.t / fxParams.riseSec);
+        fx.position.y = p.baseY + fxParams.height * easeOutCubic(k);
+        fx.material.opacity = 0.35;
+        if (k >= 1) { p.phase = 'fade'; p.t = 0; }
+      } else if (p.phase === 'fade') {
+        p.t += dt;
+        const k = Math.min(1, p.t / fxParams.fadeSec);
+        fx.position.y = p.baseY + fxParams.height;
+        fx.material.opacity = 0.35 * (1 - easeInQuad(k));
+        if (k >= 1) { p.phase = 'rise'; p.t = 0; fx.position.y = p.baseY; fx.material.opacity = 0.35; }
+      }
     });
+
+    // モデル回転
+    if (root){
+      root.rotation.set(
+        THREE.MathUtils.degToRad(params.rotateX),
+        THREE.MathUtils.degToRad(params.rotateY),
+        THREE.MathUtils.degToRad(params.rotateZ)
+      );
+    }
 
     controls.update();
     renderer.render(scene, camera);
@@ -432,6 +484,7 @@
   }
   tick();
 
+  // リサイズ
   window.addEventListener('resize', ()=>{
     const w = container.clientWidth, h = container.clientHeight;
     camera.aspect = w / h;
